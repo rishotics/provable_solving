@@ -4,14 +4,28 @@ pragma solidity 0.8.19;
 import { AxiomV2Client } from './AxiomV2Client.sol';
 import { IERC20 } from '@openzeppelin-contracts/token/ERC20/IERC20.sol';
 import { Ownable } from '@openzeppelin-contracts/access/Ownable.sol';
+import "prb-math/contracts/PRBMathSD59x18.sol";
 
-contract Auctioneer is AxiomV2Client, Ownable {
+
+
+contract AuctioneerChallenge is AxiomV2Client, Ownable {
+    uint256 public constant EXPONENT_CONSTANT = 1;
+    using PRBMathSD59x18 for uint256;
+
+    struct WinnerData{
+        uint256 auctionId;
+        uint256 sellingAmount;
+        uint256 buyingAmount;
+        address winningAddress;
+    }
     event PublishWinner(
         uint256 auctionId,
         uint256 sellingAmount,
         uint256 buyingAmount,
         address winningAddress
     );
+
+    
     // event ClaimAirdrop(
     //     address indexed user,
     //     uint256 indexed queryId,
@@ -34,7 +48,7 @@ contract Auctioneer is AxiomV2Client, Ownable {
     mapping(address => bool) public querySubmitted;
     mapping(address => bool) public hasClaimed;
 
-    mapping(uint256 => address) public auctionIdToWinningAddress;
+    mapping(uint256 => WinnerData) public auctionIdToWinnerData;
 
     IERC20 public token;
 
@@ -56,14 +70,20 @@ contract Auctioneer is AxiomV2Client, Ownable {
         bytes32 signature
         address winningAddress
     ) internal {
-        require(winningAddress != address(0), "Auctioneer: Winning address cannot be 0x0");
+        require(winningAddress != address(0), "AuctioneerChallenge: Winning address cannot be 0x0");
         bytes32 hashed = keccak256(abi.encodePacked(sellingAmount, buyingAmount, winningAddress));
         bytes32 r = signature[0:32];
         bytes32 s = signature[32:64];
         uint8 v = uint8(signature[64:65]) + 27;
-        require(ecrecover(keccak256(hashed,v,r,s)), "Auctioneer: Invalid signature");
+        require(ecrecover(keccak256(hashed,v,r,s)), "AuctioneerChallenge: Invalid signature");
         
-        auctionIdToWinningAddress[auctionId] = winningAddress;
+        auctionIdToWinningAddress[auctionId] = WinnerData({
+            auctionId: auctionId,
+            sellingAmount: sellingAmount,
+            buyingAmount: buyingAmount,
+            winningAddress: winningAddress
+        
+        });
 
         emit PublishWinner(auctionId, sellingAmount, buyingAmount, winningAddress);
     }
@@ -75,7 +95,7 @@ contract Auctioneer is AxiomV2Client, Ownable {
         bytes32 signature,
         address winningAddress
     ) public {
-        require(msg.sender == auctioneer, "Auctioneer: Only auctioneer can publish winner");
+        require(msg.sender == auctioneer, "AuctioneerChallenge: Only auctioneer can publish winner");
         _publishWinner(auctionId, sellingAmount, buyingAmount, signature, winningAddress);
     }
 
@@ -104,28 +124,44 @@ contract Auctioneer is AxiomV2Client, Ownable {
         // require(!hasClaimed[callerAddr], "Autonomous Airdrop: User has already claimed this airdrop");
 
         // Parse results
-        bytes32 eventSchema = axiomResults[0];
-        address userEventAddress = address(uint160(uint256(axiomResults[1])));
-        uint32 blockNumber = uint32(uint256(axiomResults[2]));
-        address uniswapUniversalRouterAddr = address(uint160(uint256(axiomResults[3])));
+        address userEventAddress = address(uint160(uint256(axiomResults[0])));
+        uint32 blockNumber = uint32(uint256(axiomResults[1]));
+        uint256 auctionId = uint256(axiomResults[2]);
+        uint256 challengerSellingAmount = uint256(axiomResults[3]);
+        uint256 challengerBuyingAmount = uint256(axiomResults[4]);
+        address challenger = address(uint160(uint256(axiomResults[5])));
+        
 
         // Validate the results
-        require(eventSchema == SWAP_EVENT_SCHEMA, "Auctioneer: Invalid event schema");
-        require(userEventAddress == callerAddr, "Auctioneer: Invalid user address for event");
-        require(blockNumber - block.number <= 18515, "Auctioneer: Block number for transaction receipt must be less than 3 days");
-        require(uniswapUniversalRouterAddr == UNI_UNIV_ROUTER_ADDR, "Autonomous Airdrop: Transaction `to` address is not the Uniswap Universal Router address");
+        
+        require(userEventAddress == callerAddr, "AuctioneerChallenge: Invalid user address for event");
+        require(blockNumber - block.number <= 18515, "AuctioneerChallenge: Block number for transaction receipt must be less than 3 days");
+        require(challengerSellingAmount == auctionIdToWinnerData[auctionId].sellingAmount, "AuctioneerChallenge: Selling amount does not match");
+        require(challengerBuyingAmount > auctionIdToWinnerData[auctionId].buyingAmount, "AuctioneerChallenge: Buying amount does not match");
+        
+        uint256 punishmentAmount = (exponentialFunction(blockNumber - block.number)*exponentialFunction(EXPONENT_CONSTANT)*36900)/100000;
 
-        // Transfer tokens to user
-        hasClaimed[callerAddr] = true;
-        uint256 numTokens = 100 * 10**18;
-        token.transfer(callerAddr, numTokens);
+        (bool sent, bytes memory data) = challenger.call{value: punishmentAmount}("");
+        require(sent, "Failed to send Ether");
 
-        emit ClaimAirdrop(
-            callerAddr,
-            queryId,
-            numTokens,
+        emit AuctioneerPunished(
+            challenger,
+            auctionId,
+            punishmentAmount,
             axiomResults
         );
+    }
+
+
+    function exponentialFunction(int256 x) public view returns (int256) {
+        int256 z = 90000000000000000;      // 0.09
+        int256 a = 200000000000000000;     // 0.2
+        int256 b = 1080000000000000000;    // 1.08
+        int256 c = -10000000000000000000;  // -10
+        int256 d = 100000000000000000;     // 0.1
+        int256 _x = x * 1000000000000000000;
+        int256 outcome = PRBMathSD59x18.mul(a, b.pow(PRBMathSD59x18.mul(z, _x) + c)) + d;
+        return outcome;
     }
 
     function _validateAxiomV2Call(
