@@ -127,6 +127,7 @@ dependencies = [
  "hashbrown 0.14.2",
  "jsonrpsee",
  "log",
+ "parking_lot",
  "reqwest",
  "serde",
  "serde_json",

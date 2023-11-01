@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use ethers::types::{transaction::eip1559::Eip1559TransactionRequest, Address};
 use hashbrown::HashMap;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,9 +30,21 @@ pub struct SolverSolutionResponse {
     success: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
 pub struct SolverRequestResponse {
-    user_reqs: Vec<UserReq>,
+    pub user_reqs: Vec<UserReq>,
+}
+
+#[derive(Clone, Default, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct UserReq {
+    hold_token: Address,
+    hold_amt: u64,
+    want_token: Address,
+}
+
+#[derive(Debug, Default)]
+pub struct AuctioneerApiImpl {
+    pub user_reqs: RwLock<HashMap<Address, Vec<UserReq>>>,
 }
 
 #[rpc(server, namespace = "auction")]
@@ -42,23 +55,14 @@ trait AuctionApi {
     #[method(name = "getStatus")]
     fn get_status(&self) -> RpcResult<bool>;
 
+    #[method(name = "populateUsers")]
+    fn populate_users(&self, user_addr: Address, reqs: Vec<UserReq>) -> RpcResult<bool>;
+
     #[method(name = "sendSolutions")]
     async fn send_solutions(
         &self,
         solution_req: Request<SolverSolution>,
     ) -> RpcResult<SolverSolutionResponse>;
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct UserReq {
-    hold_token: Address,
-    hold_amt: u64,
-    want_token: Address,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct AuctioneerApiImpl {
-    pub user_reqs: HashMap<Address, Vec<UserReq>>,
 }
 
 impl AuctioneerApiImpl {
@@ -70,7 +74,7 @@ impl AuctioneerApiImpl {
 #[async_trait]
 impl AuctionApiServer for AuctioneerApiImpl {
     async fn get_req(&self, user_addr: Address) -> RpcResult<SolverRequestResponse> {
-        match self.user_reqs.get(&user_addr) {
+        match self.user_reqs.read().get(&user_addr) {
             Some(user_reqs) => {
                 let response = SolverRequestResponse {
                     user_reqs: user_reqs.clone(),
@@ -79,6 +83,11 @@ impl AuctionApiServer for AuctioneerApiImpl {
             }
             None => Err(Error::UserNotFound("User not found".to_string()).into()),
         }
+    }
+
+    fn populate_users(&self, user_addr: Address, reqs: Vec<UserReq>) -> RpcResult<bool> {
+        self.user_reqs.write().insert(user_addr, reqs);
+        Ok(true)
     }
 
     async fn send_solutions(
