@@ -3,13 +3,13 @@ pragma solidity 0.8.19;
 
 import { AxiomV2Client } from './AxiomV2Client.sol';
 
-import "prb-math/contracts/PRBMathSD59x18.sol";
+import "prb-math/contracts/PRBMathUD60x18.sol";
 
 
 
 contract AuctioneerChallenge is AxiomV2Client {
     uint256 public constant EXPONENT_CONSTANT = 1;
-    using PRBMathSD59x18 for uint256;
+    using PRBMathUD60x18 for uint256;
 
     struct WinnerData{
         uint256 auctionId;
@@ -146,30 +146,22 @@ contract AuctioneerChallenge is AxiomV2Client {
         require(challengerSellingAmount == auctionIdToWinnerData[auctionId].sellingAmount, "AuctioneerChallenge: Selling amount does not match");
         require(challengerBuyingAmount > auctionIdToWinnerData[auctionId].buyingAmount, "AuctioneerChallenge: Buying amount does not match");
         
-        uint256 punishmentAmount = 0;
-        // (exponentialFunction(blockNumber - block.number)*exponentialFunction(EXPONENT_CONSTANT)*36900)/100000;
-
+        uint256 ageExp = (((blockNumber - block.number)*36900)/100000).exp();
+        uint256 const = EXPONENT_CONSTANT.exp();
+        uint256 punishmentAmount = ((ageExp.mul(const)).mul(367879)).div(1000000);
+        
         (bool sent, bytes memory data) = challenger.call{value: punishmentAmount}("");
         require(sent, "Failed to send Ether");
 
-        // emit AuctioneerPunished(
-        //     challenger,
-        //     auctionId,
-        //     punishmentAmount,
-        //     axiomResults
-        // );
+        emit AuctioneerPunished(
+            challenger,
+            auctionId,
+            punishmentAmount,
+            axiomResults
+        );
     }
 
 
-    // function exponentialFunction(int256 x) public view returns (int256) {
-    //     int256 z = 90000000000000000;      // 0.09
-    //     int256 a = 200000000000000000;     // 0.2
-    //     int256 b = 1080000000000000000;    // 1.08
-    //     int256 c = -10000000000000000000;  // -10
-    //     int256 d = 100000000000000000;     // 0.1
-    //     int256 _x = x * 1000000000000000000;
-    //     int256 outcome = PRBMathSD59x18.mul(a, b.pow(PRBMathSD59x18.mul(z, _x) + c)) + d;
-    //     return outcome;
-    // }
+    
 
 }
