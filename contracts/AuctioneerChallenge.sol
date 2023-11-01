@@ -63,11 +63,10 @@ contract AuctioneerChallenge is AxiomV2Client {
     constructor(
         address _axiomV2QueryAddress, //contarct address for Axioms V2 Query contract
         uint64 _callbackSourceChainId, //chain id for the chain that will be calling the callback
-        bytes32 _axiomCallbackQuerySchema,
         address _auctioneer //
     ) AxiomV2Client(_axiomV2QueryAddress) {
         callbackSourceChainId = _callbackSourceChainId;
-        axiomCallbackQuerySchema = _axiomCallbackQuerySchema;
+        
         auctioneer = _auctioneer;
     }
 
@@ -80,10 +79,6 @@ contract AuctioneerChallenge is AxiomV2Client {
     ) internal {
         require(winningAddress != address(0), "AuctioneerChallenge: Winning address cannot be 0x0");
         bytes32 hashed = keccak256(abi.encodePacked(sellingAmount, buyingAmount, winningAddress));
-        
-        // bytes32 r = signature[0:32];
-        // bytes32 s = signature[32:64];
-        // uint8 v = uint8(signature[64:65]) + 27;
         require(hashed.recover(signature) == auctioneer, "AuctioneerChallenge: Invalid signature");
         
         auctionIdToWinnerData[auctionId] = WinnerData({
@@ -109,12 +104,12 @@ contract AuctioneerChallenge is AxiomV2Client {
     }
 
 
-    function updateCallbackQuerySchema(
-        bytes32 _axiomCallbackQuerySchema
-    ) public  {
-        axiomCallbackQuerySchema = _axiomCallbackQuerySchema;
-        emit AxiomCallbackQuerySchemaUpdated(_axiomCallbackQuerySchema);
-    }
+    // function updateCallbackQuerySchema(
+    //     bytes32 _axiomCallbackQuerySchema
+    // ) public  {
+    //     axiomCallbackQuerySchema = _axiomCallbackQuerySchema;
+    //     emit AxiomCallbackQuerySchemaUpdated(_axiomCallbackQuerySchema);
+    // }
 
     function updateAuctioneer(address _auctioneer) public  {
         address oldauctioneer = auctioneer;
