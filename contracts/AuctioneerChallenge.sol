@@ -4,12 +4,13 @@ pragma solidity 0.8.19;
 import { AxiomV2Client } from './AxiomV2Client.sol';
 
 import "prb-math/contracts/PRBMathUD60x18.sol";
-
+import "./ECDSA.sol";
 
 
 contract AuctioneerChallenge is AxiomV2Client {
     uint256 public constant EXPONENT_CONSTANT = 1;
     using PRBMathUD60x18 for uint256;
+    using ECDSA for bytes32;
 
     struct WinnerData{
         uint256 auctionId;
@@ -79,10 +80,11 @@ contract AuctioneerChallenge is AxiomV2Client {
     ) internal {
         require(winningAddress != address(0), "AuctioneerChallenge: Winning address cannot be 0x0");
         bytes32 hashed = keccak256(abi.encodePacked(sellingAmount, buyingAmount, winningAddress));
+        
         // bytes32 r = signature[0:32];
         // bytes32 s = signature[32:64];
         // uint8 v = uint8(signature[64:65]) + 27;
-        // require(ecrecover(hashed, v,r,s) == auctioneer, "AuctioneerChallenge: Invalid signature");
+        require(hashed.recover(signature) == auctioneer, "AuctioneerChallenge: Invalid signature");
         
         auctionIdToWinnerData[auctionId] = WinnerData({
             auctionId: auctionId,

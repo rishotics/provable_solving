@@ -11,8 +11,7 @@ const config: HardhatUserConfig = {
       },
       viaIR: true,
     },
-    
-  },
+      },
 };
 
 export default config;
