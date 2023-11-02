@@ -1,5 +1,6 @@
 mod auctioneer;
 mod error;
+mod solver;
 
 use crate::auctioneer::{AuctionApiServer, AuctioneerApiImpl};
 use jsonrpsee::server::ServerBuilder;
@@ -8,7 +9,7 @@ use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
 
-use self::error::Error;
+pub use self::error::Error;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -30,7 +30,7 @@ pub struct SolverRequestResponse {
     pub user_reqs: Vec<UserReq>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AllUsersRequestResponse {
     all_reqs: HashMap<Address, Vec<UserReq>>,
 }
@@ -109,6 +109,9 @@ impl AuctionApiServer for AuctioneerApiImpl {
         Ok(true)
     }
 
+    /// Updates the user reqs map
+    /// - find the req in the user_reqs map
+    /// - update the solvers with solver addresses and solutions
     fn send_solutions(
         &self,
         solver_addr: Address,
@@ -116,9 +119,6 @@ impl AuctionApiServer for AuctioneerApiImpl {
         user_addr: Address,
         user_req: UserReq,
     ) -> RpcResult<UserReq> {
-        // Updates the user reqs map
-        // - find the req in the user_reqs map
-        // - update the solvers with solver addresses and solutions
         let mut user_reqs_vec = self.user_reqs.write();
 
         match user_reqs_vec.get_mut(&user_addr) {
