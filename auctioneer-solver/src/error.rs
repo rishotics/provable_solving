@@ -6,10 +6,12 @@ use serde::{Deserialize, Serialize};
 pub enum Error {
     UserNotFound(String),
     UserAlreadyExists(String),
+    UserRequestHasBeenSolved(String),
 }
 
 const USER_NOT_FOUND: i32 = -32601;
 const USER_ALREADY_EXISTS: i32 = -32602;
+const USER_REQ_HAS_BEEN_SOLVED: i32 = -32603;
 
 impl From<Error> for ErrorObjectOwned {
     fn from(err: Error) -> Self {
@@ -17,6 +19,9 @@ impl From<Error> for ErrorObjectOwned {
             Error::UserNotFound(err) => ErrorObject::owned(USER_NOT_FOUND, err, None::<bool>),
             Error::UserAlreadyExists(err) => {
                 ErrorObject::owned(USER_ALREADY_EXISTS, err, None::<bool>)
+            }
+            Error::UserRequestHasBeenSolved(err) => {
+                ErrorObject::owned(USER_REQ_HAS_BEEN_SOLVED, err, None::<bool>)
             }
         }
     }

@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn run(addr: SocketAddr) -> anyhow::Result<()> {
+async fn run(addr: SocketAddr) -> anyhow::Result<()> {
     let cors_middleware = CorsLayer::new()
         .allow_headers(Any)
         .allow_methods(Any)
@@ -59,7 +59,7 @@ pub async fn run(addr: SocketAddr) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
 
-    use crate::auctioneer::{Response, SolverRequestResponse, UserReq};
+    use crate::auctioneer::{Response, SolverRequestResponse, SolverSolution, UserReq};
 
     use super::*;
     use ethers::types::Address;
@@ -71,7 +71,6 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_server_status() -> anyhow::Result<()> {
         let _ = tokio::spawn(async move {
@@ -131,7 +130,7 @@ mod tests {
             .header("Content-Type", "application/json")
             .json(&json!({
                 "jsonrpc": "2.0",
-                "method": "auction_populateUsers",
+                "method": "auction_populateUser",
                 "params": vec![json!(addr), json!(user_reqs)],
                 "id": "1"
             }))
@@ -167,11 +166,87 @@ mod tests {
 
         match parsed_response {
             Ok(res) => {
-                assert_eq!(res.result, SolverRequestResponse { user_reqs });
+                assert_eq!(res.result.user_reqs.len(), 1);
             }
             Err(_) => Err(anyhow::anyhow!("Failed to parse response"))?,
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_send_solution() -> anyhow::Result<()> {
+        let _ = tokio::spawn(async move {
+            let _ = setup().await;
+        });
+
+        // wait for the server to setup
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+        let rpc_addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+        let client = reqwest::Client::new();
+
+        let addr = "0x2e895C036c6DFb475b514B7B8E7eCC278E03dF47"
+            .parse::<Address>()
+            .unwrap();
+        let user_reqs: Vec<UserReq> = vec![UserReq::default()];
+
+        let response = client
+            .post(format!("Http://{}", rpc_addr.to_string()))
+            .header("Content-Type", "application/json")
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "method": "auction_populateUser",
+                "params": vec![json!(addr), json!(user_reqs)],
+                "id": "1"
+            }))
+            .send()
+            .await?;
+
+        let str_response = response.text().await?;
+        let parsed_response: anyhow::Result<Response<bool>> =
+            serde_json::from_str(&str_response).map_err(anyhow::Error::from);
+
+        match parsed_response {
+            Ok(res) => {
+                assert_eq!(res.result, true);
+            }
+            Err(_) => Err(anyhow::anyhow!("Failed to parse response"))?,
+        }
+
+        let solver_solutions = SolverSolution::default();
+        let solver_addr = Address::default();
+        let user_req = UserReq::default();
+
+        let params = vec![
+            json!(solver_addr),
+            json!(solver_solutions),
+            json!(addr),
+            json!(user_req),
+        ];
+
+        let response = client
+            .post(format!("Http://{}", rpc_addr.to_string()))
+            .header("Content-Type", "application/json")
+            .json(&json!({
+                "jsonrpc": "2.0",
+                "method": "auction_sendSolutions",
+                "params": params,
+                "id": "1"
+            }))
+            .send()
+            .await?;
+
+        let str_response = response.text().await?;
+        let parsed_response: anyhow::Result<Response<UserReq>> =
+            serde_json::from_str(&str_response).map_err(anyhow::Error::from);
+
+        match parsed_response {
+            Ok(res) => {
+                assert_eq!(res.result.solved, false)
+            }
+            Err(_) => Err(anyhow::anyhow!("Failed to parse response"))?,
+        }
         Ok(())
     }
 }
