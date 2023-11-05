@@ -1,10 +1,11 @@
-use crate::auctioneer::{
+use crate::types::{
     AllUsersRequestResponse, Response, SolverRequestResponse, SolverSolution, UserReq,
 };
 use ethers::types::Address;
 use reqwest::Client;
 use serde_json::json;
 
+#[derive(Debug)]
 pub struct SolverClient {
     rpc_endpoint: String,
     client: Client,
@@ -30,15 +31,6 @@ impl SolverClient {
 
     pub async fn get_status(&self) -> anyhow::Result<bool> {
         self.call_rpc("getStatus", json!([])).await
-    }
-
-    pub async fn populate_user(
-        &self,
-        user_addr: Address,
-        reqs: Vec<UserReq>,
-    ) -> anyhow::Result<bool> {
-        let params = json!([user_addr, reqs]);
-        self.call_rpc("populateUser", params).await
     }
 
     pub async fn send_solutions(

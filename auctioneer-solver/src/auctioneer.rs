@@ -1,61 +1,51 @@
+use crate::types::{AllUsersRequestResponse, SolverRequestResponse, SolverSolution, UserReq};
 use crate::Error;
 use async_trait::async_trait;
-use ethers::types::{transaction::eip1559::Eip1559TransactionRequest, Address};
+use ethers::core::k256::ecdsa::SigningKey;
+use ethers::middleware::{Middleware, SignerMiddleware};
+use ethers::providers::{Http, Provider};
+use ethers::signers::{LocalWallet, Wallet};
+use ethers::types::{Address, Bytes};
 use hashbrown::HashMap;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use parking_lot::RwLock;
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Request<T> {
-    pub jsonrpc: String,
-    pub method: String,
-    pub params: T,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Response<R> {
-    pub jsonrpc: String,
-    pub result: R,
-    pub id: String,
-}
-
-#[derive(Clone, Default, Debug, Deserialize, Serialize)]
-pub struct SolverSolution {
-    solutions: Vec<Eip1559TransactionRequest>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct SolverRequestResponse {
-    pub user_reqs: Vec<UserReq>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct AllUsersRequestResponse {
-    all_reqs: HashMap<Address, Vec<UserReq>>,
-}
-
-#[derive(Clone, Default, Debug, Deserialize, Serialize)]
-pub struct UserReq {
-    pub id: u64,
-    pub solved: bool,
-    pub user_addr: Address,
-    pub hold_token: Address,
-    pub hold_amt: u64,
-    pub want_token: Address,
-    pub solvers: HashMap<Address, SolverSolution>,
-    pub winning_solver: Option<Address>,
-    pub winning_solution: Option<SolverSolution>,
-    pub proof: Option<String>,
-}
-
-#[derive(Debug, Default)]
+#[allow(dead_code)]
+#[derive(Debug)]
 pub struct AuctioneerApiImpl {
     pub user_reqs: RwLock<HashMap<Address, Vec<UserReq>>>,
+    provider: Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
+}
+
+impl Default for AuctioneerApiImpl {
+    fn default() -> Self {
+        AuctioneerApiImpl {
+            user_reqs: RwLock::new(HashMap::new()),
+            provider: Arc::new(SignerMiddleware::new(
+                Provider::<Http>::try_from("https://eth.llamarpc.com")
+                    .expect("could not instantiate HTTP Provider"),
+                // Default to Anvil's testing wallet
+                "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+                    .parse::<LocalWallet>()
+                    .unwrap(),
+            )),
+        }
+    }
 }
 
 #[rpc(server, namespace = "auction")]
 trait AuctionApi {
+    #[method(name = "sendUserReq")]
+    async fn send_user_req(
+        &self,
+        user: Address,
+        hold_token: Address,
+        hold_amt: u64,
+        want_token: Address,
+        tx: Bytes,
+    ) -> RpcResult<UserReq>;
+
     #[method(name = "getReq")]
     fn get_req(&self, user_addr: Address) -> RpcResult<SolverRequestResponse>;
 
@@ -79,13 +69,58 @@ trait AuctionApi {
 }
 
 impl AuctioneerApiImpl {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(rpc_url: String) -> Self {
+        return Self {
+            user_reqs: RwLock::new(HashMap::new()),
+            provider: Arc::new(SignerMiddleware::new(
+                Provider::<Http>::try_from(rpc_url).expect("could not instantiate HTTP Provider"),
+                // Default to Anvil's testing wallet
+                "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+                    .parse::<LocalWallet>()
+                    // .unwrap() for pure convinience :)
+                    .unwrap(),
+            )),
+        };
     }
 }
 
 #[async_trait]
 impl AuctionApiServer for AuctioneerApiImpl {
+    /// Lets the user sends the user request and hold_amt to the auctioneer
+    /// and returns the user request
+    /// Note: For simplicity, we'll have the user send the hold_amt to the auctioneer directly
+    /// so that when the solver successfully solve a request, the auctioneer could pay the solver
+    /// from his/her own account
+    async fn send_user_req(
+        &self,
+        user_addr: Address,
+        hold_token: Address,
+        hold_amt: u64,
+        want_token: Address,
+        tx: Bytes,
+    ) -> RpcResult<UserReq> {
+        let receipt = self
+            .provider
+            .send_raw_transaction(tx)
+            .await
+            .map_err(|e| Error::SendingTxError(e.to_string()))?
+            .log_msg("Transaction broadcasted, pending confirmation")
+            .await
+            .map_err(|e| Error::SendingTxError(e.to_string()))?;
+        log::info!("Transaction confirmed: {:?}", receipt);
+
+        let mut user_req = UserReq::default();
+        user_req.user_addr = user_addr;
+        user_req.hold_token = hold_token;
+        user_req.hold_amt = hold_amt;
+        user_req.want_token = want_token;
+
+        self.user_reqs
+            .write()
+            .insert(user_addr, vec![user_req.clone()]);
+        Ok(user_req)
+    }
+
     fn get_req(&self, user_addr: Address) -> RpcResult<SolverRequestResponse> {
         match self.user_reqs.read().get(&user_addr) {
             Some(user_reqs) => {

@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.7"
 async-trait = "0.1.74"
+dotenv = "0.15.0"
 ethers = "2.0.10"
 hashbrown = { version = "0.14.2", features = ["serde"] }
 jsonrpsee = { version = "0.20", features = ["server", "macros", "client"] }
@@ -20,3 +21,7 @@ tokio = { version =  "1.8", features = ["signal", "rt-multi-thread", "macros", "
 tower = "0.4.13"
 tower-http = { version = "0.4.1", features = ["cors", "trace"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bin]]
+name = "example"
+path = "src/bin/example.rs"

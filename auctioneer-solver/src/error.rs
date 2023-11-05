@@ -7,11 +7,13 @@ pub enum Error {
     UserNotFound(String),
     UserAlreadyExists(String),
     UserRequestHasBeenSolved(String),
+    SendingTxError(String),
 }
 
 const USER_NOT_FOUND: i32 = -32601;
 const USER_ALREADY_EXISTS: i32 = -32602;
 const USER_REQ_HAS_BEEN_SOLVED: i32 = -32603;
+const SENDING_TX_ERROR: i32 = -32604;
 
 impl From<Error> for ErrorObjectOwned {
     fn from(err: Error) -> Self {
@@ -23,6 +25,7 @@ impl From<Error> for ErrorObjectOwned {
             Error::UserRequestHasBeenSolved(err) => {
                 ErrorObject::owned(USER_REQ_HAS_BEEN_SOLVED, err, None::<bool>)
             }
+            Error::SendingTxError(err) => ErrorObject::owned(SENDING_TX_ERROR, err, None::<bool>),
         }
     }
 }
