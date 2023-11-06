@@ -1,19 +1,44 @@
+use alloy_primitives::{Address as alloy_Address, U256 as alloy_U256};
+use alloy_sol_types::{sol, SolCall};
 use auctioneer_solver::{
-    generate_raw_tx, run, Response, SolverClient, UserReq, ANVIL_PORT, ANVIL_URL,
-    AUCTIONEER_ADDRESS, PINNED_BLOCK, SOLVER_1_KEY, SOLVER_2_KEY, USDC_ADDRESS, USER_ADDRESS,
-    USER_KEY, WETH_ADDRESS,
+    generate_raw_tx, run, Response, SolverClient, SolverSolution, UserReq, ANVIL_PORT, ANVIL_URL,
+    AUCTIONEER_ADDRESS, PINNED_BLOCK, SOLVER_1_KEY, SOLVER_2_KEY, UNI_V2_ROUTER, UNI_V3_ROUTER,
+    USDC_ADDRESS, USER_ADDRESS, USER_KEY, WETH_ADDRESS,
 };
 use dotenv::dotenv;
+use ethers::contract::abigen;
 use ethers::middleware::SignerMiddleware;
 use ethers::providers::{Http, Provider};
 use ethers::signers::{LocalWallet, Signer};
-use ethers::types::Address;
-use ethers::utils::Anvil;
+use ethers::types::{Address, U256};
+use ethers::utils::{parse_ether, Anvil};
 use serde_json::json;
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
+
+abigen!(AuctioneerChallenge, "./src/abi/auctioneer_challenge.json",);
+
+abigen!(
+    WETH,
+    r#"[
+        function deposit() public payable
+        function withdraw(uint wad) public
+        function totalSupply() public view returns (uint)
+        function approve(address guy, uint wad) public returns (bool)
+        function transfer(address dst, uint wad) public returns (bool)
+        function transferFrom(address src, address dst, uint wad) public returns (bool)
+    ]"#
+);
+
+abigen!(UniV3SwapRouter, "./src/abi/uniswap_v3_router_1.json",);
+
+sol!(
+    #[derive(Debug)]
+    function getAmountsOut(uint amountIn, address[] memory path) public view returns (uint[] memory amounts);
+    function getAmountsIn(uint amountOut, address[] memory path) public view returns (uint[] memory amounts);
+);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -35,10 +60,19 @@ async fn main() -> anyhow::Result<()> {
         .fork(mainnet_http_url.clone())
         .fork_block_number(PINNED_BLOCK)
         .spawn();
+    let anvil_endpoint = format!("http://localhost:{}", ANVIL_PORT);
+
+    let deployer = Provider::<Http>::try_from(anvil_endpoint.clone())
+        .expect("could not instantiate HTTP Provider");
+
+    let (_, receipt) = AuctioneerChallenge::deploy(deployer.into(), ())?
+        .send_with_receipt()
+        .await?;
+    let auctioneer_contract_address = receipt.contract_address.unwrap();
 
     // Sets up the server
     let rpc_addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    let rpc_endpoint = format!("http://{}", rpc_addr);
+    let _rpc_endpoint = format!("http://{}", rpc_addr);
     let _ = tokio::spawn(async move {
         run(rpc_addr, ANVIL_URL.to_string()).await?;
         Ok::<(), anyhow::Error>(())
@@ -49,32 +83,130 @@ async fn main() -> anyhow::Result<()> {
     println!("UserReq id: {}", user_req_id);
 
     // Sets up the first solver
-    let solver_1 = SolverClient::new(&rpc_endpoint, SOLVER_1_KEY);
-    let solver_2 = SolverClient::new(&rpc_endpoint, SOLVER_2_KEY);
+    let solver_1 = SolverClient::new(&anvil_endpoint, SOLVER_1_KEY);
+    let solver_2 = SolverClient::new(&anvil_endpoint, SOLVER_2_KEY);
 
-    let user_req = solver_1
-        .get_req_from_id(USER_ADDRESS.parse::<Address>().unwrap(), user_req_id)
+    // Gets Weth for both solvers and approve to the UniV2 and UniV3 Routers
+    let weth = WETH::new(
+        WETH_ADDRESS.parse::<Address>().unwrap(),
+        solver_1.provider.clone(),
+    );
+    let _ = weth
+        .approve(UNI_V2_ROUTER.parse::<Address>().unwrap(), U256::MAX)
+        .send()
+        .await?
         .await?;
-    println!("usre_req: {:?}", user_req);
+    let _ = weth
+        .deposit()
+        .value(parse_ether(11).unwrap())
+        .send()
+        .await?
+        .await?;
+    let weth = WETH::new(
+        WETH_ADDRESS.parse::<Address>().unwrap(),
+        solver_2.provider.clone(),
+    );
+    let _ = weth
+        .approve(UNI_V3_ROUTER.parse::<Address>().unwrap(), U256::MAX)
+        .send()
+        .await?
+        .await?;
+    let _ = weth
+        .deposit()
+        .value(parse_ether(11).unwrap())
+        .send()
+        .await?
+        .await?;
+
+    // Craft Solver 1's solution using Univwapv2
+    let path = vec![
+        // WETH address
+        alloy_Address::parse_checksummed(WETH_ADDRESS, None).unwrap(),
+        // USDt address
+        alloy_Address::parse_checksummed(USDC_ADDRESS, None).unwrap(),
+    ];
+
+    let v2_router_get_amount_out = getAmountsOutCall {
+        amountIn: alloy_U256::from(1000000u64),
+        path,
+    };
+
+    let call_data = v2_router_get_amount_out.encode();
 
     // solver 1 solution using Uniswapv2 pool
-    //let solver_1_solution =
     let solver_1_addr = solver_1.provider.signer().address();
-    solver_1
-        .send_solutions(
-            solver_1_addr,
-            user_req.solvers[&solver_1_addr].clone(),
-            USER_ADDRESS.parse::<Address>().unwrap(),
-            user_req.clone(),
-        )
+    let solver_1_solution = generate_raw_tx(
+        solver_1.provider.clone(),
+        solver_1_addr,
+        UNI_V2_ROUTER.parse::<Address>().unwrap(),
+        None,
+        Some(call_data.into()),
+    )
+    .await?;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("Http://{}", rpc_addr.to_string()))
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "method": "auction_getReqFromId",
+            "params": vec![json!(USER_ADDRESS), json!(user_req_id)],
+            "id": "1"
+        }))
+        .send()
         .await?;
+    let str_response = response.text().await?;
 
-    // Todo:
-    // -solver 1 submits solution using univ2
-    // -solver 2 submits solution using univ3
-    // -auctioneer compare who can return more
-    // -update the user req and submit on-chain
+    let user_req: anyhow::Result<Response<UserReq>> =
+        serde_json::from_str(&str_response).map_err(anyhow::Error::from);
 
+    // Sends the solutions
+    let params = vec![
+        json!(solver_1_addr),
+        json!(SolverSolution::new(vec![solver_1_solution])),
+        json!(USER_ADDRESS),
+        json!(user_req.as_ref().unwrap()),
+    ];
+
+    let response = client
+        .post(format!("Http://{}", rpc_addr.to_string()))
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "method": "auction_sendSolutions",
+            "params": params,
+            "id": "1"
+        }))
+        .send()
+        .await?;
+    let str_response = response.text().await?;
+
+    let _: anyhow::Result<Response<UserReq>> =
+        serde_json::from_str(&str_response).map_err(anyhow::Error::from);
+
+    // Publish the winner
+    let params = vec![
+        json!(user_req.unwrap()),
+        json!(PINNED_BLOCK),
+        json!(auctioneer_contract_address),
+    ];
+
+    let response = client
+        .post(format!("Http://{}", rpc_addr.to_string()))
+        .header("Content-Type", "application/json")
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "method": "auction_resolveSolutions",
+            "params": params,
+            "id": "1"
+        }))
+        .send()
+        .await?;
+    let str_response = response.text().await?;
+
+    let _: anyhow::Result<Response<bool>> =
+        serde_json::from_str(&str_response).map_err(anyhow::Error::from);
     Ok(())
 }
 
@@ -94,7 +226,7 @@ async fn send_mock_user_req(
         user_client,
         USER_ADDRESS.parse::<Address>().unwrap(),
         AUCTIONEER_ADDRESS.parse::<Address>().unwrap(),
-        10,
+        Some(10),
         None,
     )
     .await?;

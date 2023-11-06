@@ -1,4 +1,4 @@
-use ethers::types::{transaction::eip2718::TypedTransaction, Address};
+use ethers::types::{Address, Bytes};
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,13 @@ pub struct Response<R> {
 
 #[derive(Clone, Default, Debug, Deserialize, Serialize)]
 pub struct SolverSolution {
-    solutions: Vec<TypedTransaction>,
+    pub solutions: Vec<Bytes>,
+}
+
+impl SolverSolution {
+    pub fn new(tx: Vec<Bytes>) -> Self {
+        Self { solutions: tx }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -1,18 +1,24 @@
 use crate::types::{AllUsersRequestResponse, SolverRequestResponse, SolverSolution, UserReq};
-use crate::Error;
+use crate::{Error, ANVIL_PORT_SIMULATION, USDC_ADDRESS};
 use async_trait::async_trait;
+use dotenv::dotenv;
+use ethers::contract::abigen;
 use ethers::core::k256::ecdsa::SigningKey;
 use ethers::middleware::{Middleware, SignerMiddleware};
 use ethers::providers::{Http, Provider};
 use ethers::signers::{LocalWallet, Wallet};
-use ethers::types::{Address, Bytes};
+use ethers::types::{Address, Bytes, U256};
+use ethers::utils::Anvil;
 use hashbrown::HashMap;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use parking_lot::RwLock;
 use std::collections::hash_map::DefaultHasher;
+use std::env;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+abigen!(USDC, "./src/abi/usdc.json",);
+abigen!(AuctioneerChallenge, "./src/abi/auctioneer_challenge.json",);
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct AuctioneerApiImpl {
@@ -71,6 +77,14 @@ trait AuctionApi {
         user_addr: Address,
         user_req: UserReq,
     ) -> RpcResult<UserReq>;
+
+    #[method(name = "resolveSolutions")]
+    async fn resolve_solutions(
+        &self,
+        user_req: UserReq,
+        block: u64,
+        auctioneer_addr: Address,
+    ) -> RpcResult<bool>;
 }
 
 impl AuctioneerApiImpl {
@@ -198,6 +212,96 @@ impl AuctionApiServer for AuctioneerApiImpl {
     fn get_status(&self) -> RpcResult<bool> {
         Ok(true)
     }
+
+    async fn resolve_solutions(
+        &self,
+        mut user_req: UserReq,
+        block: u64,
+        auctioneer_contract_addr: Address,
+    ) -> RpcResult<bool> {
+        let mut winning_solver: Option<Address> = None;
+        let mut winning_solution: Option<SolverSolution> = None;
+        let mut max_value = U256::zero();
+
+        for (solver_address, solver_solution) in user_req.solvers.iter() {
+            for solution in &solver_solution.solutions {
+                let simulated_ending_value = simulate_solution(
+                    solution.clone(),
+                    block,
+                    user_req.user_addr,
+                    "USDC".to_string(),
+                )
+                .await
+                .map_err(|e| Error::SimulatingTxError(e.to_string()))?;
+
+                if simulated_ending_value > max_value {
+                    max_value = simulated_ending_value;
+                    winning_solver = Some(*solver_address);
+                    winning_solution = Some(solver_solution.clone());
+                }
+            }
+        }
+        user_req.winning_solver = winning_solver;
+        user_req.winning_solution = winning_solution;
+
+        let auction_id = user_req.id;
+        let selling_amt = user_req.hold_amt;
+        let buying_amt = max_value;
+        let signature = user_req.proof.unwrap().as_bytes().to_vec();
+        let winning_address = winning_solver.unwrap();
+
+        let auctioneer = AuctioneerChallenge::new(auctioneer_contract_addr, self.provider.clone());
+        let _ = auctioneer
+            .publish_winner(
+                U256::from(auction_id),
+                U256::from(selling_amt),
+                U256::from(buying_amt),
+                signature.into(),
+                winning_address,
+            )
+            .call()
+            .await
+            .map_err(|e| Error::SimulatingTxError(e.to_string()))?;
+
+        Ok(true)
+    }
+}
+
+async fn simulate_solution(
+    solution: Bytes,
+    block: u64,
+    user_addr: Address,
+    token_name: String,
+) -> anyhow::Result<ethers::types::U256> {
+    dotenv().ok();
+    let mainnet_http_url = env::var("HTTP_RPC").unwrap_or_else(|e| {
+        log::error!("Error: {}", e);
+        return e.to_string();
+    });
+    let _anvil = Anvil::new()
+        .chain_id(1u64)
+        .port(ANVIL_PORT_SIMULATION)
+        .fork(mainnet_http_url.clone())
+        .fork_block_number(block)
+        .spawn();
+    let anvil_endpoint = format!("http://localhost:{}", ANVIL_PORT_SIMULATION);
+
+    let provider = Provider::<Http>::try_from(anvil_endpoint).unwrap();
+
+    let _ = provider
+        .send_raw_transaction(solution)
+        .await?
+        .log_msg("Transaction broadcasted, pending confirmation")
+        .await?;
+
+    let token = match token_name.as_str() {
+        "USDC" => USDC::new(USDC_ADDRESS.parse::<Address>().unwrap(), provider.into()),
+        _ => panic!("token not supported"),
+    };
+
+    let balance = token.balance_of(user_addr).call().await?;
+
+    Ok(balance)
 }
 
 /// Helper function to generate UserReq id

@@ -1,4 +1,6 @@
 mod auctioneer;
+mod bindings;
+mod consts;
 mod error;
 mod solver;
 mod types;
@@ -10,21 +12,12 @@ use std::net::SocketAddr;
 use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 
+pub use self::bindings::weth::weth_contract;
+pub use self::consts::*;
 pub use self::error::Error;
 pub use self::solver::SolverClient;
-pub use self::types::{Response, UserReq};
+pub use self::types::{Response, SolverSolution, UserReq};
 pub use self::utils::generate_raw_tx;
-
-pub const USER_KEY: &str = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
-pub const SOLVER_1_KEY: &str = "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6";
-pub const SOLVER_2_KEY: &str = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
-pub const PINNED_BLOCK: u64 = 18490936u64;
-pub const USER_ADDRESS: &str = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-pub const AUCTIONEER_ADDRESS: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
-pub const WETH_ADDRESS: &str = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
-pub const USDC_ADDRESS: &str = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
-pub const ANVIL_URL: &str = "http://localhost:8545";
-pub const ANVIL_PORT: u16 = 8545;
 
 pub async fn run(addr: SocketAddr, rpc_url: String) -> anyhow::Result<()> {
     let cors_middleware = CorsLayer::new()

@@ -2,8 +2,8 @@ use ethers::core::k256::ecdsa::SigningKey;
 use ethers::middleware::{Middleware, SignerMiddleware};
 use ethers::providers::{Http, Provider};
 use ethers::signers::{Signer, Wallet};
-use ethers::types::Bytes;
 use ethers::types::{transaction::eip2718::TypedTransaction, Address};
+use ethers::types::{Bytes, U256};
 use ethers::utils::parse_ether;
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ pub async fn generate_raw_tx(
     provider: Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
     from: Address,
     to: Address,
-    value: u64,
+    value: Option<u64>,
     data: Option<Bytes>,
 ) -> anyhow::Result<Bytes> {
     let nonce = provider.get_transaction_count(from, None).await?;
@@ -25,17 +25,16 @@ pub async fn generate_raw_tx(
             .from(from)
             .to(to)
             .chain_id(1)
-            .value(parse_ether(value).unwrap())
             .nonce(nonce)
             .max_fee_per_gas(max_fee_per_gas)
             .max_priority_fee_per_gas(max_priority_fee),
     );
 
-    let access_list = provider.create_access_list(&tx, None).await?.access_list;
-    tx.set_access_list(access_list);
+    tx.set_gas(U256::from(1000000u64));
 
-    let estimated_gas = provider.estimate_gas(&tx, None).await?;
-    tx.set_gas(estimated_gas);
+    if let Some(value) = value {
+        tx.set_value(parse_ether(value).unwrap());
+    }
 
     if let Some(data) = data {
         tx.set_data(data);

@@ -36,16 +36,18 @@ impl SolverClient {
     }
 
     pub async fn get_req(&self, user_addr: Address) -> anyhow::Result<SolverRequestResponse> {
-        let params = json!([user_addr]);
+        let params = vec![json!([user_addr])];
         self.call_rpc("getReq", params).await
     }
 
     pub async fn get_all_reqs(&self) -> anyhow::Result<AllUsersRequestResponse> {
-        self.call_rpc("getAllReq", json!([])).await
+        self.call_rpc("getAllReq", Vec::<serde_json::Value>::new())
+            .await
     }
 
     pub async fn get_status(&self) -> anyhow::Result<bool> {
-        self.call_rpc("getStatus", json!([])).await
+        self.call_rpc("getStatus", Vec::<serde_json::Value>::new())
+            .await
     }
 
     pub async fn send_solutions(
@@ -55,19 +57,24 @@ impl SolverClient {
         user_addr: Address,
         user_req: UserReq,
     ) -> anyhow::Result<UserReq> {
-        let params = json!([solver_addr, solutions, user_addr, user_req]);
+        let params = vec![
+            json!(solver_addr),
+            json!(solutions),
+            json!(user_addr),
+            json!(user_req),
+        ];
         self.call_rpc("sendSolutions", params).await
     }
 
-    pub async fn get_req_from_id(&self, user_addr: Address, id: u64) -> anyhow::Result<UserReq> {
-        let params = json!([user_addr, id]);
+    pub async fn get_req_from_id(&self, user_addr: &str, id: u64) -> anyhow::Result<UserReq> {
+        let params = vec![json!(user_addr), json!(id)];
         self.call_rpc("getReqFromId", params).await
     }
 
     async fn call_rpc<T: serde::de::DeserializeOwned + std::fmt::Debug>(
         &self,
         method: &str,
-        params: serde_json::Value,
+        params: Vec<serde_json::Value>,
     ) -> anyhow::Result<T> {
         // Constructing the request payload
         let payload = json!({
@@ -78,13 +85,12 @@ impl SolverClient {
         });
 
         // Sending the request to the server
-        let response = self
+        let sent = self
             .client
             .post(&self.rpc_endpoint)
             .header("Content-Type", "application/json")
-            .json(&payload)
-            .send()
-            .await?;
+            .json(&payload);
+        let response = sent.send().await?;
 
         // Converting the response to text
         let str_response = response.text().await?;
