@@ -9,6 +9,8 @@ use ethers::types::{Address, Bytes};
 use hashbrown::HashMap;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use parking_lot::RwLock;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[allow(dead_code)]
@@ -57,6 +59,9 @@ trait AuctionApi {
 
     #[method(name = "populateUser")]
     fn populate_user(&self, user_addr: Address, reqs: Vec<UserReq>) -> RpcResult<bool>;
+
+    #[method(name = "getReqFromId")]
+    fn get_req_from_id(&self, user_addr: Address, id: u64) -> RpcResult<UserReq>;
 
     #[method(name = "sendSolutions")]
     fn send_solutions(
@@ -115,6 +120,9 @@ impl AuctionApiServer for AuctioneerApiImpl {
         user_req.hold_amt = hold_amt;
         user_req.want_token = want_token;
 
+        let id = user_req_id_generator(user_addr, hold_token, hold_amt, want_token);
+        user_req.id = id;
+
         self.user_reqs
             .write()
             .insert(user_addr, vec![user_req.clone()]);
@@ -130,6 +138,18 @@ impl AuctionApiServer for AuctioneerApiImpl {
                 Ok(response)
             }
             None => Err(Error::UserNotFound("User not found".to_string()).into()),
+        }
+    }
+
+    fn get_req_from_id(&self, user_addr: Address, id: u64) -> RpcResult<UserReq> {
+        let user_reqs_vec = self.user_reqs.read();
+
+        match user_reqs_vec.get(&user_addr) {
+            Some(reqs) => match reqs.iter().find(|req| req.id == id) {
+                Some(matching_req) => Ok(matching_req.clone()),
+                None => Err(Error::UserNotFound("user request not found".to_string()).into()),
+            },
+            None => Err(Error::UserNotFound("user not found".to_string()).into()),
         }
     }
 
@@ -164,18 +184,39 @@ impl AuctionApiServer for AuctioneerApiImpl {
                         Ok(matching_req.clone())
                     } else {
                         Err(Error::UserRequestHasBeenSolved(
-                            "User request has been solved".to_string(),
+                            "user request has been solved".to_string(),
                         )
                         .into())
                     }
                 }
-                None => Err(Error::UserNotFound("User request not found".to_string()).into()),
+                None => Err(Error::UserNotFound("user request not found".to_string()).into()),
             },
-            None => Err(Error::UserNotFound("User not found".to_string()).into()),
+            None => Err(Error::UserNotFound("user not found".to_string()).into()),
         }
     }
 
     fn get_status(&self) -> RpcResult<bool> {
         Ok(true)
     }
+}
+
+/// Helper function to generate UserReq id
+pub fn user_req_id_generator(
+    user_addr: Address,
+    hold_token_addr: Address,
+    hold_amt: u64,
+    want_token_addr: Address,
+) -> u64 {
+    // Create id from hashes
+    let mut hasher = DefaultHasher::new();
+
+    // Hash each element
+    user_addr.hash(&mut hasher);
+    hold_token_addr.hash(&mut hasher);
+    hold_amt.hash(&mut hasher);
+    want_token_addr.hash(&mut hasher);
+
+    // Finish the hash to get a u64 as id
+    let id = hasher.finish();
+    id
 }

@@ -1,22 +1,37 @@
 use crate::types::{
     AllUsersRequestResponse, Response, SolverRequestResponse, SolverSolution, UserReq,
 };
+use ethers::core::k256::ecdsa::SigningKey;
+use ethers::middleware::SignerMiddleware;
+use ethers::providers::{Http, Provider};
+use ethers::signers::{LocalWallet, Wallet};
 use ethers::types::Address;
 use reqwest::Client;
 use serde_json::json;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct SolverClient {
     rpc_endpoint: String,
     client: Client,
+    pub provider: Arc<SignerMiddleware<Provider<Http>, Wallet<SigningKey>>>,
 }
 
 #[allow(dead_code)]
 impl SolverClient {
-    pub fn new(rpc_endpoint: &str) -> Self {
+    pub fn new(rpc_endpoint: &str, solver_key: &str) -> Self {
         Self {
             rpc_endpoint: rpc_endpoint.to_string(),
             client: Client::new(),
+            provider: Arc::new(SignerMiddleware::new(
+                Provider::<Http>::try_from(rpc_endpoint)
+                    .expect("could not instantiate HTTP Provider"),
+                // Default to Anvil's testing wallet
+                solver_key
+                    .parse::<LocalWallet>()
+                    // .unwrap() for pure convinience :)
+                    .unwrap(),
+            )),
         }
     }
 
@@ -42,6 +57,11 @@ impl SolverClient {
     ) -> anyhow::Result<UserReq> {
         let params = json!([solver_addr, solutions, user_addr, user_req]);
         self.call_rpc("sendSolutions", params).await
+    }
+
+    pub async fn get_req_from_id(&self, user_addr: Address, id: u64) -> anyhow::Result<UserReq> {
+        let params = json!([user_addr, id]);
+        self.call_rpc("getReqFromId", params).await
     }
 
     async fn call_rpc<T: serde::de::DeserializeOwned + std::fmt::Debug>(

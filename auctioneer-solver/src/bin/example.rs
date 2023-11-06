@@ -1,12 +1,13 @@
 use auctioneer_solver::{
-    run, Response, SolverClient, UserReq, ANVIL_PORT, ANVIL_URL, AUCTIONEER_ADDRESS, PINNED_BLOCK,
-    USDC_ADDRESS, USER_ADDRESS, USER_KEY, WETH_ADDRESS,
+    generate_raw_tx, run, Response, SolverClient, UserReq, ANVIL_PORT, ANVIL_URL,
+    AUCTIONEER_ADDRESS, PINNED_BLOCK, SOLVER_1_KEY, SOLVER_2_KEY, USDC_ADDRESS, USER_ADDRESS,
+    USER_KEY, WETH_ADDRESS,
 };
 use dotenv::dotenv;
-use ethers::middleware::{Middleware, SignerMiddleware};
+use ethers::middleware::SignerMiddleware;
 use ethers::providers::{Http, Provider};
 use ethers::signers::{LocalWallet, Signer};
-use ethers::types::{transaction::eip2718::TypedTransaction, Address, TransactionRequest};
+use ethers::types::Address;
 use ethers::utils::Anvil;
 use serde_json::json;
 use std::env;
@@ -21,7 +22,6 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Gets the Eth mainnet connection
-
     dotenv().ok();
     let mainnet_http_url = env::var("HTTP_RPC").unwrap_or_else(|e| {
         log::error!("Error: {}", e);
@@ -30,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Sets up anvil instance for testing
     let _anvil = Anvil::new()
+        .chain_id(1u64)
         .port(ANVIL_PORT)
         .fork(mainnet_http_url.clone())
         .fork_block_number(PINNED_BLOCK)
@@ -37,18 +38,36 @@ async fn main() -> anyhow::Result<()> {
 
     // Sets up the server
     let rpc_addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let rpc_endpoint = format!("http://{}", rpc_addr);
     let _ = tokio::spawn(async move {
         run(rpc_addr, ANVIL_URL.to_string()).await?;
         Ok::<(), anyhow::Error>(())
     });
 
     // Populates the initial user and UserReq
-    setup(rpc_addr.to_string(), ANVIL_URL.to_string()).await?;
-    let rpc_endpoint = format!("http://{}", rpc_addr);
+    let user_req_id = send_mock_user_req(rpc_addr.to_string(), ANVIL_URL.to_string()).await?;
+    println!("UserReq id: {}", user_req_id);
 
     // Sets up the first solver
-    let solver_1 = SolverClient::new(&rpc_endpoint);
-    let solver_2 = SolverClient::new(&rpc_endpoint);
+    let solver_1 = SolverClient::new(&rpc_endpoint, SOLVER_1_KEY);
+    let solver_2 = SolverClient::new(&rpc_endpoint, SOLVER_2_KEY);
+
+    let user_req = solver_1
+        .get_req_from_id(USER_ADDRESS.parse::<Address>().unwrap(), user_req_id)
+        .await?;
+    println!("usre_req: {:?}", user_req);
+
+    // solver 1 solution using Uniswapv2 pool
+    //let solver_1_solution =
+    let solver_1_addr = solver_1.provider.signer().address();
+    solver_1
+        .send_solutions(
+            solver_1_addr,
+            user_req.solvers[&solver_1_addr].clone(),
+            USER_ADDRESS.parse::<Address>().unwrap(),
+            user_req.clone(),
+        )
+        .await?;
 
     // Todo:
     // -solver 1 submits solution using univ2
@@ -59,31 +78,26 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Helper method to populsate the UserReq with the tokens
-async fn setup(rpc_addr: impl Into<String>, anvil_addr: impl Into<String>) -> anyhow::Result<()> {
-    // Populate the user request
+/// Helper method to send a UserReq to the auctioneer
+async fn send_mock_user_req(
+    rpc_addr: impl Into<String>,
+    anvil_url: impl Into<String>,
+) -> anyhow::Result<u64> {
     let client = reqwest::Client::new();
 
     let user_client = Arc::new(SignerMiddleware::new(
-        Provider::<Http>::try_from(anvil_addr.into()).expect("could not instantiate HTTP Provider"),
+        Provider::<Http>::try_from(anvil_url.into()).expect("could not instantiate HTTP Provider"),
         USER_KEY.parse::<LocalWallet>().unwrap(),
     ));
 
-    let nonce = user_client
-        .get_transaction_count(USER_ADDRESS, None)
-        .await?;
-
-    let tx = TypedTransaction::Legacy(
-        TransactionRequest::new()
-            .to(AUCTIONEER_ADDRESS)
-            .value(1000u64)
-            .from(USER_ADDRESS.parse::<Address>().unwrap())
-            .gas(100000000u64)
-            .nonce(nonce),
-    );
-
-    let signed_tx = user_client.signer().sign_transaction(&tx).await?;
-    let raw_tx = tx.rlp_signed(&signed_tx);
+    let raw_tx = generate_raw_tx(
+        user_client,
+        USER_ADDRESS.parse::<Address>().unwrap(),
+        AUCTIONEER_ADDRESS.parse::<Address>().unwrap(),
+        10,
+        None,
+    )
+    .await?;
 
     let params = vec![
         json!(USER_ADDRESS),
@@ -110,9 +124,7 @@ async fn setup(rpc_addr: impl Into<String>, anvil_addr: impl Into<String>) -> an
         serde_json::from_str(&str_response).map_err(anyhow::Error::from);
 
     match parsed_response {
-        Ok(res) => res,
-        Err(_) => Err(anyhow::anyhow!("Failed to parse response"))?,
-    };
-
-    Ok(())
+        Ok(res) => Ok(res.result.id),
+        Err(_) => Err(anyhow::anyhow!("Failed to parse response")),
+    }
 }

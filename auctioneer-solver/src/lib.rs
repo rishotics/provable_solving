@@ -2,6 +2,7 @@ mod auctioneer;
 mod error;
 mod solver;
 mod types;
+mod utils;
 
 use crate::auctioneer::{AuctionApiServer, AuctioneerApiImpl};
 use jsonrpsee::server::ServerBuilder;
@@ -12,8 +13,11 @@ use tower_http::cors::{Any, CorsLayer};
 pub use self::error::Error;
 pub use self::solver::SolverClient;
 pub use self::types::{Response, UserReq};
+pub use self::utils::generate_raw_tx;
 
 pub const USER_KEY: &str = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+pub const SOLVER_1_KEY: &str = "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6";
+pub const SOLVER_2_KEY: &str = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
 pub const PINNED_BLOCK: u64 = 18490936u64;
 pub const USER_ADDRESS: &str = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 pub const AUCTIONEER_ADDRESS: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";

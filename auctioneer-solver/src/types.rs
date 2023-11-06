@@ -1,4 +1,4 @@
-use ethers::types::{transaction::eip1559::Eip1559TransactionRequest, Address};
+use ethers::types::{transaction::eip2718::TypedTransaction, Address};
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,7 @@ pub struct Response<R> {
 
 #[derive(Clone, Default, Debug, Deserialize, Serialize)]
 pub struct SolverSolution {
-    solutions: Vec<Eip1559TransactionRequest>,
+    solutions: Vec<TypedTransaction>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
