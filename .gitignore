@@ -3,7 +3,10 @@ node_modules
 coverage
 coverage.json
 typechain
-typechain-types
+contracts/interfaces
+yarn-error.log
+yarn.lock
+package-lock.json
 
 # Hardhat files
 cache
