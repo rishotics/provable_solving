@@ -230,7 +230,6 @@ impl AuctionApiServer for AuctioneerApiImpl {
                 )
                 .await
                 .map_err(|e| Error::SimulatingTxError(e.to_string()))?;
-                println!("simulated_ending_value:{:?}", &simulated_solution);
 
                 if simulated_solution > max_value {
                     max_value = simulated_solution;
@@ -241,6 +240,7 @@ impl AuctionApiServer for AuctioneerApiImpl {
         }
         user_req.winning_solver = winning_solver;
         user_req.winning_solution = winning_solution;
+        log::info!("winning solver: {:?}", winning_solver);
 
         let auction_id = user_req.id;
         let selling_amt = user_req.hold_amt;
@@ -286,7 +286,6 @@ async fn simulate_solution(
         .await?
         .log_msg("Transaction broadcasted, pending confirmation")
         .await?;
-    println!("receipt: {:?}", receipt);
 
     // Todo: only support static token matching for now
     // add dynamic token matching

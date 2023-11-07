@@ -11,6 +11,7 @@ alloy-sol-types = "0.2"
 anyhow = "1.0.7"
 async-trait = "0.1.74"
 dotenv = "0.15.0"
+env_logger = "0.10.0"
 ethers = "2.0.10"
 hashbrown = { version = "0.14.2", features = ["serde"] }
 jsonrpsee = { version = "0.20", features = ["server", "macros", "client"] }
@@ -22,6 +23,7 @@ serde_json = "1.0.108"
 tokio = { version =  "1.8", features = ["signal", "rt-multi-thread", "macros", "test-util"] }
 tower = "0.4.13"
 tower-http = { version = "0.4.1", features = ["cors", "trace"] }
+tracing = "0.1.40"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [[bin]]

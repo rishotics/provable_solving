@@ -6,8 +6,9 @@ use auctioneer_solver::{
     UNI_V3_ROUTER, USDC_ADDRESS, USER_ADDRESS, USER_KEY, WETH_ADDRESS,
 };
 use dotenv::dotenv;
+use env_logger::Env;
 use ethers::contract::abigen;
-use ethers::middleware::{Middleware, SignerMiddleware};
+use ethers::middleware::SignerMiddleware;
 use ethers::providers::{Http, Provider};
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, U256};
@@ -16,8 +17,7 @@ use serde_json::json;
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tracing_subscriber::EnvFilter;
-
+use tracing_subscriber;
 abigen!(AuctioneerChallenge, "./src/abi/auctioneer_challenge.json",);
 
 abigen!(
@@ -32,21 +32,22 @@ abigen!(
     ]"#
 );
 
-abigen!(UniV2SwapRouter, "./src/abi/uniswap_v2_router_1.json",);
-
 abigen!(UniV3SwapRouter, "./src/abi/uniswap_v3_router_1.json",);
 
 sol!(
     #[derive(Debug)]
     function getAmountsOut(uint amountIn, address[] memory path) public view returns (uint[] memory amounts);
     function getAmountsIn(uint amountOut, address[] memory path) public view returns (uint[] memory amounts);
+    function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] calldata path, address to, uint256 deadline);
 );
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+
+    if std::env::var("RUST_LOG").is_ok() {
+        tracing_subscriber::fmt::init();
+    }
 
     // Gets the Eth mainnet connection
     dotenv().ok();
@@ -89,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Populates the initial user and UserReq
     let user_req_id = send_mock_user_req(rpc_addr.to_string(), ANVIL_URL.to_string()).await?;
-    println!("UserReq id: {}", user_req_id);
+    log::info!("UserReq id: {}", user_req_id);
 
     // Sets up the first solver
     let solver_1 = SolverClient::new(&anvil_endpoint, SOLVER_1_KEY);
@@ -111,10 +112,6 @@ async fn main() -> anyhow::Result<()> {
         .send()
         .await?
         .await?;
-    let v2_router = UniV2SwapRouter::new(
-        UNI_V2_ROUTER.parse::<Address>().unwrap(),
-        solver_1.provider.clone(),
-    );
     let weth = WETH::new(
         WETH_ADDRESS.parse::<Address>().unwrap(),
         solver_2.provider.clone(),
@@ -139,12 +136,15 @@ async fn main() -> anyhow::Result<()> {
         alloy_Address::parse_checksummed(USDC_ADDRESS, None).unwrap(),
     ];
 
-    let v2_router_get_amount_out = getAmountsOutCall {
+    let v2_swap = swapExactTokensForTokensCall {
         amountIn: alloy_U256::from(10000000000u64),
+        amountOutMin: alloy_U256::from(1u64),
         path,
+        to: alloy_Address::parse_checksummed(USER_ADDRESS, None).unwrap(),
+        deadline: alloy_U256::from(10000000000u64),
     };
 
-    let call_data = v2_router_get_amount_out.encode();
+    let call_data = v2_swap.encode();
 
     // solver 1 solution using Uniswapv2 pool
     let solver_1_addr = solver_1.provider.signer().address();
@@ -217,7 +217,6 @@ async fn main() -> anyhow::Result<()> {
         .send()
         .await?;
     let str_response = response.text().await?;
-    println!("str_response: {:?}", str_response);
 
     let _: anyhow::Result<Response<bool>> =
         serde_json::from_str(&str_response).map_err(anyhow::Error::from);
@@ -248,7 +247,7 @@ async fn send_mock_user_req(
     let params = vec![
         json!(USER_ADDRESS),
         json!(WETH_ADDRESS),
-        json!(10000000000000u64),
+        json!(10000000000u64),
         json!(USDC_ADDRESS),
         json!(raw_tx),
     ];
@@ -268,8 +267,6 @@ async fn send_mock_user_req(
     let str_response = response.text().await?;
     let parsed_response: anyhow::Result<Response<UserReq>> =
         serde_json::from_str(&str_response).map_err(anyhow::Error::from);
-    let balance = user_client.get_balance(AUCTIONEER_ADDRESS, None).await?;
-    println!("balance: {}", balance);
     match parsed_response {
         Ok(res) => Ok(res.result.id),
         Err(_) => Err(anyhow::anyhow!("Failed to parse response")),
