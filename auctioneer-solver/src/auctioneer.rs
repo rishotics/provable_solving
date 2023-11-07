@@ -1,19 +1,17 @@
 use crate::types::{AllUsersRequestResponse, SolverRequestResponse, SolverSolution, UserReq};
-use crate::{Error, ANVIL_PORT_SIMULATION, USDC_ADDRESS};
+use crate::{Error, AUCTIONEER_ADDRESS, USDC_ADDRESS};
 use async_trait::async_trait;
-use dotenv::dotenv;
 use ethers::contract::abigen;
 use ethers::core::k256::ecdsa::SigningKey;
 use ethers::middleware::{Middleware, SignerMiddleware};
 use ethers::providers::{Http, Provider};
 use ethers::signers::{LocalWallet, Wallet};
 use ethers::types::{Address, Bytes, U256};
-use ethers::utils::Anvil;
+use ethers::utils::keccak256;
 use hashbrown::HashMap;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use parking_lot::RwLock;
 use std::collections::hash_map::DefaultHasher;
-use std::env;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -82,8 +80,8 @@ trait AuctionApi {
     async fn resolve_solutions(
         &self,
         user_req: UserReq,
-        block: u64,
         auctioneer_addr: Address,
+        simulation_endpoint: String,
     ) -> RpcResult<bool>;
 }
 
@@ -118,7 +116,7 @@ impl AuctionApiServer for AuctioneerApiImpl {
         want_token: Address,
         tx: Bytes,
     ) -> RpcResult<UserReq> {
-        let receipt = self
+        let _receipt = self
             .provider
             .send_raw_transaction(tx)
             .await
@@ -126,7 +124,6 @@ impl AuctionApiServer for AuctioneerApiImpl {
             .log_msg("Transaction broadcasted, pending confirmation")
             .await
             .map_err(|e| Error::SendingTxError(e.to_string()))?;
-        log::info!("Transaction confirmed: {:?}", receipt);
 
         let mut user_req = UserReq::default();
         user_req.user_addr = user_addr;
@@ -216,8 +213,8 @@ impl AuctionApiServer for AuctioneerApiImpl {
     async fn resolve_solutions(
         &self,
         mut user_req: UserReq,
-        block: u64,
         auctioneer_contract_addr: Address,
+        simulation_endpoint: String,
     ) -> RpcResult<bool> {
         let mut winning_solver: Option<Address> = None;
         let mut winning_solution: Option<SolverSolution> = None;
@@ -225,17 +222,18 @@ impl AuctionApiServer for AuctioneerApiImpl {
 
         for (solver_address, solver_solution) in user_req.solvers.iter() {
             for solution in &solver_solution.solutions {
-                let simulated_ending_value = simulate_solution(
+                let simulated_solution = simulate_solution(
+                    simulation_endpoint.clone(),
                     solution.clone(),
-                    block,
                     user_req.user_addr,
                     "USDC".to_string(),
                 )
                 .await
                 .map_err(|e| Error::SimulatingTxError(e.to_string()))?;
+                println!("simulated_ending_value:{:?}", &simulated_solution);
 
-                if simulated_ending_value > max_value {
-                    max_value = simulated_ending_value;
+                if simulated_solution > max_value {
+                    max_value = simulated_solution;
                     winning_solver = Some(*solver_address);
                     winning_solution = Some(solver_solution.clone());
                 }
@@ -247,8 +245,16 @@ impl AuctionApiServer for AuctioneerApiImpl {
         let auction_id = user_req.id;
         let selling_amt = user_req.hold_amt;
         let buying_amt = max_value;
-        let signature = user_req.proof.unwrap().as_bytes().to_vec();
         let winning_address = winning_solver.unwrap();
+
+        let data_to_sign = encode_data(selling_amt.into(), buying_amt, winning_address);
+        let hash = keccak256(&data_to_sign);
+
+        let signature = self
+            .provider
+            .sign(hash, &AUCTIONEER_ADDRESS.parse::<Address>().unwrap())
+            .await
+            .map_err(|e| Error::SignningError(e.to_string()))?;
 
         let auctioneer = AuctioneerChallenge::new(auctioneer_contract_addr, self.provider.clone());
         let _ = auctioneer
@@ -256,7 +262,7 @@ impl AuctionApiServer for AuctioneerApiImpl {
                 U256::from(auction_id),
                 U256::from(selling_amt),
                 U256::from(buying_amt),
-                signature.into(),
+                signature.to_vec().into(),
                 winning_address,
             )
             .call()
@@ -268,32 +274,22 @@ impl AuctionApiServer for AuctioneerApiImpl {
 }
 
 async fn simulate_solution(
+    simulation_endpoint: String,
     solution: Bytes,
-    block: u64,
     user_addr: Address,
     token_name: String,
 ) -> anyhow::Result<ethers::types::U256> {
-    dotenv().ok();
-    let mainnet_http_url = env::var("HTTP_RPC").unwrap_or_else(|e| {
-        log::error!("Error: {}", e);
-        return e.to_string();
-    });
-    let _anvil = Anvil::new()
-        .chain_id(1u64)
-        .port(ANVIL_PORT_SIMULATION)
-        .fork(mainnet_http_url.clone())
-        .fork_block_number(block)
-        .spawn();
-    let anvil_endpoint = format!("http://localhost:{}", ANVIL_PORT_SIMULATION);
+    let provider = Provider::<Http>::try_from(simulation_endpoint).unwrap();
 
-    let provider = Provider::<Http>::try_from(anvil_endpoint).unwrap();
-
-    let _ = provider
+    let receipt = provider
         .send_raw_transaction(solution)
         .await?
         .log_msg("Transaction broadcasted, pending confirmation")
         .await?;
+    println!("receipt: {:?}", receipt);
 
+    // Todo: only support static token matching for now
+    // add dynamic token matching
     let token = match token_name.as_str() {
         "USDC" => USDC::new(USDC_ADDRESS.parse::<Address>().unwrap(), provider.into()),
         _ => panic!("token not supported"),
@@ -323,4 +319,26 @@ pub fn user_req_id_generator(
     // Finish the hash to get a u64 as id
     let id = hasher.finish();
     id
+}
+
+fn encode_data(selling_amount: U256, buying_amount: U256, winning_address: Address) -> Vec<u8> {
+    let mut encoded = Vec::new();
+
+    // Convert U256 values to big-endian byte arrays
+    let mut selling_amount_bytes = [0u8; 32];
+    selling_amount.to_big_endian(&mut selling_amount_bytes);
+    let mut buying_amount_bytes = [0u8; 32];
+    buying_amount.to_big_endian(&mut buying_amount_bytes);
+
+    // For the address, we convert it to a 20-byte array
+    let winning_address_bytes = winning_address.as_bytes();
+
+    // Solidity's abi.encodePacked does not trim leading zeros for numbers.
+    encoded.extend_from_slice(&selling_amount_bytes);
+    encoded.extend_from_slice(&buying_amount_bytes);
+
+    // Add the address bytes (rightmost 20 bytes of the Address type)
+    encoded.extend_from_slice(&winning_address_bytes[12..]); // Address is 20 bytes, but H160 has leading zeros
+
+    encoded
 }

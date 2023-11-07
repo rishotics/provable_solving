@@ -2,12 +2,12 @@ use alloy_primitives::{Address as alloy_Address, U256 as alloy_U256};
 use alloy_sol_types::{sol, SolCall};
 use auctioneer_solver::{
     generate_raw_tx, run, Response, SolverClient, SolverSolution, UserReq, ANVIL_PORT, ANVIL_URL,
-    AUCTIONEER_ADDRESS, PINNED_BLOCK, SOLVER_1_KEY, SOLVER_2_KEY, UNI_V2_ROUTER, UNI_V3_ROUTER,
-    USDC_ADDRESS, USER_ADDRESS, USER_KEY, WETH_ADDRESS,
+    AUCTIONEER_ADDRESS, AXIOM_V2_ADDRESS, PINNED_BLOCK, SOLVER_1_KEY, SOLVER_2_KEY, UNI_V2_ROUTER,
+    UNI_V3_ROUTER, USDC_ADDRESS, USER_ADDRESS, USER_KEY, WETH_ADDRESS,
 };
 use dotenv::dotenv;
 use ethers::contract::abigen;
-use ethers::middleware::SignerMiddleware;
+use ethers::middleware::{Middleware, SignerMiddleware};
 use ethers::providers::{Http, Provider};
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, U256};
@@ -31,6 +31,8 @@ abigen!(
         function transferFrom(address src, address dst, uint wad) public returns (bool)
     ]"#
 );
+
+abigen!(UniV2SwapRouter, "./src/abi/uniswap_v2_router_1.json",);
 
 abigen!(UniV3SwapRouter, "./src/abi/uniswap_v3_router_1.json",);
 
@@ -65,9 +67,16 @@ async fn main() -> anyhow::Result<()> {
     let deployer = Provider::<Http>::try_from(anvil_endpoint.clone())
         .expect("could not instantiate HTTP Provider");
 
-    let (_, receipt) = AuctioneerChallenge::deploy(deployer.into(), ())?
-        .send_with_receipt()
-        .await?;
+    let (_, receipt) = AuctioneerChallenge::deploy(
+        deployer.into(),
+        (
+            AXIOM_V2_ADDRESS.parse::<Address>()?,
+            1u64,
+            AUCTIONEER_ADDRESS.parse::<Address>()?,
+        ),
+    )?
+    .send_with_receipt()
+    .await?;
     let auctioneer_contract_address = receipt.contract_address.unwrap();
 
     // Sets up the server
@@ -102,6 +111,10 @@ async fn main() -> anyhow::Result<()> {
         .send()
         .await?
         .await?;
+    let v2_router = UniV2SwapRouter::new(
+        UNI_V2_ROUTER.parse::<Address>().unwrap(),
+        solver_1.provider.clone(),
+    );
     let weth = WETH::new(
         WETH_ADDRESS.parse::<Address>().unwrap(),
         solver_2.provider.clone(),
@@ -127,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
     ];
 
     let v2_router_get_amount_out = getAmountsOutCall {
-        amountIn: alloy_U256::from(1000000u64),
+        amountIn: alloy_U256::from(10000000000u64),
         path,
     };
 
@@ -157,16 +170,16 @@ async fn main() -> anyhow::Result<()> {
         .send()
         .await?;
     let str_response = response.text().await?;
-
     let user_req: anyhow::Result<Response<UserReq>> =
         serde_json::from_str(&str_response).map_err(anyhow::Error::from);
+    let user_req = user_req.unwrap().result;
 
     // Sends the solutions
     let params = vec![
         json!(solver_1_addr),
         json!(SolverSolution::new(vec![solver_1_solution])),
         json!(USER_ADDRESS),
-        json!(user_req.as_ref().unwrap()),
+        json!(user_req),
     ];
 
     let response = client
@@ -181,15 +194,15 @@ async fn main() -> anyhow::Result<()> {
         .send()
         .await?;
     let str_response = response.text().await?;
-
-    let _: anyhow::Result<Response<UserReq>> =
+    let user_req: anyhow::Result<Response<UserReq>> =
         serde_json::from_str(&str_response).map_err(anyhow::Error::from);
+    let user_req = user_req.unwrap().result;
 
     // Publish the winner
     let params = vec![
-        json!(user_req.unwrap()),
-        json!(PINNED_BLOCK),
+        json!(user_req),
         json!(auctioneer_contract_address),
+        json!(ANVIL_URL.to_string()),
     ];
 
     let response = client
@@ -204,6 +217,7 @@ async fn main() -> anyhow::Result<()> {
         .send()
         .await?;
     let str_response = response.text().await?;
+    println!("str_response: {:?}", str_response);
 
     let _: anyhow::Result<Response<bool>> =
         serde_json::from_str(&str_response).map_err(anyhow::Error::from);
@@ -223,7 +237,7 @@ async fn send_mock_user_req(
     ));
 
     let raw_tx = generate_raw_tx(
-        user_client,
+        user_client.clone(),
         USER_ADDRESS.parse::<Address>().unwrap(),
         AUCTIONEER_ADDRESS.parse::<Address>().unwrap(),
         Some(10),
@@ -234,7 +248,7 @@ async fn send_mock_user_req(
     let params = vec![
         json!(USER_ADDRESS),
         json!(WETH_ADDRESS),
-        json!(10u64),
+        json!(10000000000000u64),
         json!(USDC_ADDRESS),
         json!(raw_tx),
     ];
@@ -254,7 +268,8 @@ async fn send_mock_user_req(
     let str_response = response.text().await?;
     let parsed_response: anyhow::Result<Response<UserReq>> =
         serde_json::from_str(&str_response).map_err(anyhow::Error::from);
-
+    let balance = user_client.get_balance(AUCTIONEER_ADDRESS, None).await?;
+    println!("balance: {}", balance);
     match parsed_response {
         Ok(res) => Ok(res.result.id),
         Err(_) => Err(anyhow::anyhow!("Failed to parse response")),
