@@ -239,13 +239,14 @@ impl AuctionApiServer for AuctioneerApiImpl {
             }
         }
         user_req.winning_solver = winning_solver;
-        user_req.winning_solution = winning_solution;
-        log::info!("winning solver: {:?}", winning_solver);
+        user_req.winning_solution = winning_solution.clone();
+        log::info!("Winning solution: {:?}", winning_solution);
 
         let auction_id = user_req.id;
         let selling_amt = user_req.hold_amt;
         let buying_amt = max_value;
         let winning_address = winning_solver.unwrap();
+        log::info!("Winning solution: {:?}", &buying_amt);
 
         let data_to_sign = encode_data(selling_amt.into(), buying_amt, winning_address);
         let hash = keccak256(&data_to_sign);
@@ -255,6 +256,7 @@ impl AuctionApiServer for AuctioneerApiImpl {
             .sign(hash, &AUCTIONEER_ADDRESS.parse::<Address>().unwrap())
             .await
             .map_err(|e| Error::SignningError(e.to_string()))?;
+        log::info!("Generate signature: {:?}", &signature);
 
         let auctioneer = AuctioneerChallenge::new(auctioneer_contract_addr, self.provider.clone());
         let _ = auctioneer
@@ -268,6 +270,7 @@ impl AuctionApiServer for AuctioneerApiImpl {
             .call()
             .await
             .map_err(|e| Error::SimulatingTxError(e.to_string()))?;
+        log::info!("Published winner successfully");
 
         Ok(true)
     }
@@ -281,7 +284,7 @@ async fn simulate_solution(
 ) -> anyhow::Result<ethers::types::U256> {
     let provider = Provider::<Http>::try_from(simulation_endpoint).unwrap();
 
-    let receipt = provider
+    let _receipt = provider
         .send_raw_transaction(solution)
         .await?
         .log_msg("Transaction broadcasted, pending confirmation")

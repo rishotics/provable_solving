@@ -87,14 +87,19 @@ async fn main() -> anyhow::Result<()> {
         run(rpc_addr, ANVIL_URL.to_string()).await?;
         Ok::<(), anyhow::Error>(())
     });
+    log::info!("Auctioneer server running on: {}", rpc_addr.to_string());
 
     // Populates the initial user and UserReq
     let user_req_id = send_mock_user_req(rpc_addr.to_string(), ANVIL_URL.to_string()).await?;
-    log::info!("UserReq id: {}", user_req_id);
+    log::info!("Sending UserReq: {}", user_req_id);
 
     // Sets up the first solver
+    log::info!("Starting Solver 1...");
     let solver_1 = SolverClient::new(&anvil_endpoint, SOLVER_1_KEY);
+    log::info!("Solver 1 address: {}", solver_1.provider.signer().address());
+    log::info!("Starting Solver 2...");
     let solver_2 = SolverClient::new(&anvil_endpoint, SOLVER_2_KEY);
+    log::info!("Solver 2 address: {}", solver_2.provider.signer().address());
 
     // Gets Weth for both solvers and approve to the UniV2 and UniV3 Routers
     let weth = WETH::new(
@@ -136,6 +141,7 @@ async fn main() -> anyhow::Result<()> {
         alloy_Address::parse_checksummed(USDC_ADDRESS, None).unwrap(),
     ];
 
+    // Generate swap calldata
     let v2_swap = swapExactTokensForTokensCall {
         amountIn: alloy_U256::from(10000000000u64),
         amountOutMin: alloy_U256::from(1u64),
@@ -143,10 +149,9 @@ async fn main() -> anyhow::Result<()> {
         to: alloy_Address::parse_checksummed(USER_ADDRESS, None).unwrap(),
         deadline: alloy_U256::from(10000000000u64),
     };
-
     let call_data = v2_swap.encode();
 
-    // solver 1 solution using Uniswapv2 pool
+    // Solution using Uniswapv2 pool
     let solver_1_addr = solver_1.provider.signer().address();
     let solver_1_solution = generate_raw_tx(
         solver_1.provider.clone(),
@@ -177,10 +182,11 @@ async fn main() -> anyhow::Result<()> {
     // Sends the solutions
     let params = vec![
         json!(solver_1_addr),
-        json!(SolverSolution::new(vec![solver_1_solution])),
+        json!(SolverSolution::new(vec![solver_1_solution.clone()])),
         json!(USER_ADDRESS),
         json!(user_req),
     ];
+    log::info!("Sending solver solution: {:?}", params[1]);
 
     let response = client
         .post(format!("Http://{}", rpc_addr.to_string()))
@@ -197,6 +203,14 @@ async fn main() -> anyhow::Result<()> {
     let user_req: anyhow::Result<Response<UserReq>> =
         serde_json::from_str(&str_response).map_err(anyhow::Error::from);
     let user_req = user_req.unwrap().result;
+
+    let params = vec![
+        json!(solver_1_addr),
+        json!(SolverSolution::new(vec![solver_1_solution])),
+        json!(USER_ADDRESS),
+        json!(user_req),
+    ];
+    log::info!("Sending solver 2 solution: {:?}", params[1]);
 
     // Publish the winner
     let params = vec![
